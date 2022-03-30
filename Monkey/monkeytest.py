@@ -15,12 +15,14 @@ import time
 #pip install chardet
 #此处输入你要执行的monkey和adb命令，当前仅分析了logcat log，没分析monkey log，有需要可以立即做，by ding，20220128
 #运行后的log和结果均在和py文件同一目录下
+import xlwt
+
 monkey_order='adb shell monkey  --throttle 200 --ignore-crashes --ignore-timeouts --ignore-security-exceptions --ignore-native-crashes  --monitor-native-crashes -v -v -v  1000000'
 logcat_order='adb logcat'
 monkey_log_address=''#为空时则在py文件同目录内生成该log文件
 logcat_address=''
 DEVICESNAME='emulator-55567'
-Time_num=48    #运行多少次monkey，单位是1cell_time
+Time_num=12    #运行多少次monkey，单位是1cell_time
 CELLTIME=3600   # 单个时间长度，单位秒
 
 #逐行读取log文件中文件字段，识别anr和crash字段，返回一个dict
@@ -29,7 +31,7 @@ def monkey_log_analysis(monkey_log_address):
     anr_str = '/data/anr/anr'  # 这个还需要改
     crash_str = 'CRASH:'
     exception_str = 'FATAL EXCEPTION:'
-
+    exception_str1 = 'AndroidRuntime: Process:'
     with open(monkey_log_address, 'r+', encoding='utf-8') as f:
         while True:
             e = f.readline()
@@ -48,11 +50,17 @@ def monkey_log_analysis(monkey_log_address):
                     result_dict[crash_str] = [e]
 
             if exception_str in e:
+                # if exception_str or exception_str1 in e:
                 if exception_str in result_dict:
                     result_dict[exception_str].append(e)
                 else:
                     result_dict[exception_str] = [e]
 
+            if exception_str1 in e:
+                if exception_str in result_dict:
+                    result_dict[exception_str].append(e)
+                else:
+                    result_dict[exception_str] = [e]
     return (result_dict)
     
 #解决从adb获取的out流中可能有utf-8，gbk，windows-1252等各种其奇怪的编码格式导致的程序停止运行
@@ -86,7 +94,7 @@ def monkey_write_task(q,timestamp_str,monkey_order,singe_device_name):
     print('monkey-start')
 
     result=os.system(monkey_order+' > "'+monkey_log_address+'"')
-    if checked_monkey_on(singe_device_name):
+    if checked_monkey_on(singe_device_name,monkey_log_address):
         print("monkey测试进行中")
     else:
         print("monkey启动失败")
@@ -250,7 +258,7 @@ def checked_kill_monkey(singe_device_name):
             kill_monkey(singe_device_name)
             time.sleep(2)
 
-def checked_monkey_on(singe_device_name):
+def checked_monkey_on(singe_device_name,monkey_log_address):
     for i in range(3):
       if(get_monkey_pid(singe_device_name)):
           return True
@@ -357,25 +365,134 @@ def get_single_devices_name():
     else:
         return('000')
 
+def readTxt_toExcel(valueList,timestamp_str):
+    workbook = xlwt.Workbook()  #
+    sheet = workbook.add_sheet('log', cell_overwrite_ok=True)  # Excel单元格名字
+    style = xlwt.XFStyle()
+    font = xlwt.Font()
+    font.name = 'logexcpetion'
+    font.bold = True
+    # 设置样式的字体
+    style.font = font
+    title = ["id", "模块", "错误类型", "次数", "对应log"]
+
+    '''写入title 信息'''
+    col = 0  # 控制列
+    for head in title:
+        sheet.write(0, col, head, style)
+        col += 1
+    '''写入 value值以及文件名'''
+    h = 1
+    for i0 in  range(len(valueList)):
+        sheet.write(h, 0, i0)
+        # end_name = i1.rfind('.')
+        value1 = str(valueList[i0][0])
+        value2 = str(valueList[i0][1])
+        value3 = str(valueList[i0][3])
+        value4= str(valueList[i0][2])
+        sheet.write(h, 1, value1)
+        sheet.write(h, 2, value2)
+        sheet.write(h, 3, value3)
+        sheet.write(h, 4, value4)
+        h += 1
+    resultxls = os.path.join(os.getcwd(),'错误log统计_'+timestamp_str + '.xls')
+    #print("resultxle"+str(resultxls))
+    workbook.save(resultxls)
+
+def get_txt_content(file_path,timestamp_str):  # 获取文件内容
+    valueListAll_fatal = []
+    valueListAll_anr = []
+    valueListAll_crash = []
+    for path, d, file_list in os.walk(file_path):  # path 原路径下的文件遍历    flie_list 文件下的所有文件
+        anr_str = '/data/anr/anr'
+        crash_str = 'CRASH'
+        exception_str = 'FATAL EXCEPTION'
+        for filename in file_list:
+            if filename.endswith("result_Fail.txt"):
+                with open(path+"\\"+filename, 'r+', encoding="utf-8") as f:  # 打开文件 文本的全部路径
+                    while True:
+                        e = f.readline()
+                        valueList_anr = []
+                        valueList_fatal = []
+                        valueList_crash = []  # 单个列表
+                        if e == '':
+                            break
+                        if exception_str or "AndroidRuntime" in e:
+                            if  'AndroidRuntime: Process:' in e:
+                                errmode = e[e.index("Process: "):e.index(", PID:")]
+                                valueList_fatal.insert(1, exception_str)
+                                valueList_fatal.insert(2, filename)
+                                valueList_fatal.insert(0,errmode[9:])
+                        if valueList_fatal:
+                            valueListAll_fatal.append(valueList_fatal)
+                        if anr_str in e:
+                            if "Dumping to" in e :
+                                errmode = e[e.index("Dumping to "):e.index("\n")]
+                                valueList_anr.insert(1, anr_str)
+                                valueList_anr.insert(0,errmode[11:])
+                                valueList_anr.insert(2,filename)
+                        if valueList_anr:
+                            valueListAll_anr.append(valueList_anr)
+                        if crash_str in e:
+                            if "// CRASH:" in e:
+                                errmode = e[e.index("CRASH: "):e.index("pid ")]
+                                valueList_crash.insert(0, errmode[7:-2])
+                                valueList_crash.insert(1, crash_str)
+                                valueList_crash.insert(2, filename)
+                        if valueList_crash:
+                            valueListAll_crash.append(valueList_crash)
+    valueListAll = valueListAll_fatal + valueListAll_crash +valueListAll_anr
+    if valueListAll:
+        list_num=exltime(valueListAll)
+        #print("valueListAll全部列表" + str(valueListAll))
+        readTxt_toExcel(list_num,timestamp_str)
+    else:
+        print("**********列表为空，没有错误***********")
+
+def exltime(valueListAll):
+    map={}
+    for item in valueListAll:
+        s = str(item)
+        if s in map.keys():
+            map[s] = map[s] + 1
+        else:
+            map[s] = 1
+    list_all=[]
+    for key in map.keys():
+        list1 = []
+        key1=key.replace("[","").replace("]","").replace("'","")
+        list1 = list(key1.split(","))
+        list1.append(map[key])
+        list_all.append(list1)
+    return list_all
+
+
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     if check_info(DEVICESNAME):
         singe_device_name = get_single_devices_name()
         if singe_device_name == '000':
             singe_device_name = DEVICESNAME
-        monkey_order=add_seed(monkey_order)
-        print('monkey_order: '+monkey_order)
-        print('logcat_order: '+logcat_order)
+
         r=input('decide to run monkey ?y/n ')#测试运行开启前信息引导
         if r.lower()=='y':
             for i in range(Time_num):
+                print("==========================这是第" + str(i + 1) + "次运行=============================================")
+                monkey_order = add_seed(monkey_order)
+                print('monkey_order: ' + monkey_order)
+                print('logcat_order: ' + logcat_order)
                 now = datetime.now()
                 timestamp_str = datetime.strftime(now, '%Y%m%d_%H-%M-%S_')
                 os.system("adb shell logcat -c")
-                print("==========================这是第"+str(i+1)+"次运行=============================================")
                 run_monkey_logcat(monkey_order,logcat_order,singe_device_name,timestamp_str)
         else:
             print('stoped')
+        # 数据处理
+        print("======================异常log数据统计===================")
+        file_path = os.path.join(os.getcwd())
+        now1 = datetime.now()
+        timestamp_str1 = datetime.strftime(now1, '%Y%m%d%H%M%S')
+        get_txt_content(file_path,timestamp_str1)
     else:
         print('no device')
     print("######monket test run success#########")
